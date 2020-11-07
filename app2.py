@@ -6,21 +6,14 @@
 # - Code by Jioh L. Jung (ziozzang@gmail.com)
 #############################################
 
-import sys
-if sys.version_info[0] < 3:
-  import httplib
-  import urlparse
-else:
-  import http.client as httplib
-  import urllib.parse as urlparse
-
+import http.client as httplib
+import json
 import re
 import urllib
-import json
+import urllib.parse as urlparse
 
 from flask import Flask, Blueprint, request, Response, url_for
 from werkzeug.datastructures import Headers
-from werkzeug.exceptions import NotFound
 
 app = Flask(__name__)
 
@@ -31,7 +24,7 @@ LISTEN_PORT = 7788
 proxy = Blueprint('proxy', __name__)
 
 # You can insert Authentication here.
-#proxy.before_request(check_login)
+# proxy.before_request(check_login)
 
 # Filters.
 HTML_REGEX = re.compile(r'((?:src|action|href)=["\'])/')
@@ -45,28 +38,35 @@ REGEXES = [HTML_REGEX, JQUERY_REGEX, JS_LOCATION_REGEX, CSS_REGEX]
 def iterform(multidict):
     for key in multidict.keys():
         for value in multidict.getlist(key):
-            yield (key.encode("utf8"), value.encode("utf8"))
+            yield key.encode("utf8"), value.encode("utf8")
+
 
 def parse_host_port(h, proto):
     """Parses strings in the form host[:port]"""
     host_port = h.split(":", 1)
     if len(host_port) == 1:
-        if proto.lower() == 'http': return (h, 80)
-        if proto.lower() == 'https': return (h, 443)
-        return (h, 443) # Default is HTTPS
+        if proto.lower() == 'http':
+            return h, 80
+
+        if proto.lower() == 'https':
+            return h, 443
+
+        return h, 443  # Default is HTTPS
+
     else:
         host_port[1] = int(host_port[1])
         return host_port
 
 
 # For RESTful Service
+@proxy.route('/proxy', methods=["GET", "POST", "PUT", "DELETE"])
 @proxy.route('/proxy/<proto>/<host>/', methods=["GET", "POST", "PUT", "DELETE"])
 @proxy.route('/proxy/<proto>/<host>/<path:file>', methods=["GET", "POST", "PUT", "DELETE"])
 def proxy_request(proto, host, file=""):
     hostname, port = parse_host_port(host, proto)
 
-    print ("H: '%s' P: %d" % (hostname, port))
-    print ("F: '%s'" % (file))
+    print("H: '%s' P: %d" % (hostname, port))
+    print("F: '%s'" % file)
     # Whitelist a few headers to pass on
     request_headers = {}
     for h in ["Cookie", "Referer", "X-Csrf-Token"]:
@@ -75,6 +75,7 @@ def proxy_request(proto, host, file=""):
 
     if request.query_string:
         path = "/%s?%s" % (file, request.query_string)
+
     else:
         path = "/" + file
 
@@ -84,7 +85,6 @@ def proxy_request(proto, host, file=""):
         request_headers["Content-Length"] = len(form_data)
     else:
         form_data = None
-
 
     if not ('host' in request_headers.keys()):
         request_headers['host'] = hostname
@@ -100,7 +100,7 @@ def proxy_request(proto, host, file=""):
     d = {}
     response_headers = Headers()
     for key, value in resp.getheaders():
-        print ("HEADER: '%s':'%s'" % (key, value))
+        print("HEADER: '%s':'%s'" % (key, value))
         d[key.lower()] = value
         if key in ["content-length", "connection", "content-type"]:
             continue
@@ -140,29 +140,29 @@ def proxy_request(proto, host, file=""):
 
     # Restructing Contents.
     if "content-type" in d.keys():
-      if d["content-type"].find("application/json") >= 0:
-        # JSON format conentens will be modified here.
-        jc = json.loads(contents)
-        if jc.has_key("nodes"):
-            del jc["nodes"]
-        contents = json.dumps(jc)
+        if d["content-type"].find("application/json") >= 0:
+            # JSON format conentens will be modified here.
+            jc = json.loads(contents)
+            if jc.has_key("nodes"):
+                del jc["nodes"]
+            contents = json.dumps(jc)
 
-      else:
-        # Generic HTTP.
-        pass
+        else:
+            # Generic HTTP.
+            pass
 
-        # only valid for python2 / cuz, python3's string & byte handling is diffrent from python2
-        #for regex in REGEXES:
-        #   contents = regex.sub(r'\1%s' % root, contents)
+            # only valid for python2 / cuz, python3's string & byte handling is diffrent from python2
+            # for regex in REGEXES:
+            #   contents = regex.sub(r'\1%s' % root, contents)
     else:
-      # set default content-type, for error handling
-      d['content-type'] = 'text/html; charset=utf-8'
+        # set default content-type, for error handling
+        d['content-type'] = 'text/html; charset=utf-8'
 
     # Remove transfer-encoding: chunked header. cuz proxy does not use chunk trnasfer.
     if 'transfer-encoding' in d:
-      if d['transfer-encoding'].lower() == 'chunked':
-        del(d['transfer-encoding'])
-        d['content-length'] = len(contents)
+        if d['transfer-encoding'].lower() == 'chunked':
+            del (d['transfer-encoding'])
+            d['content-length'] = len(contents)
 
     flask_response = Response(response=contents,
                               status=resp.status,
